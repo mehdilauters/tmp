@@ -1,0 +1,99 @@
+symfony new gitlab-symfony --full
+cd gitlab-symfony
+
+mkdir docker
+cd docker
+# copy the content of https://gitlab.com/ramet/environnement-de-developpement-symfony-5-avec-docker-et-docker-compose
+
+# set docker-compose.yml
+version: "3.8"
+services:
+
+    db_gitlab:
+        image: mysql
+        container_name: db_docker_gitlab
+        restart: always
+        volumes:
+            - db-data:/var/lib/mysql
+        environment:
+            MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+        networks:
+            - dev
+
+    www_gitlab:
+        build: php
+        container_name: www_docker_gitlab
+        ports:
+          - "8080:80"
+        volumes:
+            - ./php/vhosts:/etc/apache2/sites-enabled
+            - ../:/var/www
+        restart: always
+        networks:
+            - dev
+
+networks:
+    dev:
+
+volumes:
+    db-data:
+
+# set vhost.conf
+<VirtualHost *:80>
+    ServerName localhost
+
+    DocumentRoot /var/www/public
+    DirectoryIndex /index.php
+
+    <Directory /var/www/public>
+        AllowOverride None
+        Order Allow,Deny
+        Allow from All
+
+        FallbackResource /index.php
+    </Directory>
+
+    # uncomment the following lines if you install assets as symlinks
+    # or run into problems when compiling LESS/Sass/CoffeeScript assets
+    # <Directory /var/www/project>
+    #     Options FollowSymlinks
+    # </Directory>
+
+    # optionally disable the fallback resource for the asset directories
+    # which will allow Apache to return a 404 error when files are
+    # not found instead of passing the request to Symfony
+    <Directory /var/www/public/bundles>
+        FallbackResource disabled
+    </Directory>
+    ErrorLog /var/log/apache2/project_error.log
+    CustomLog /var/log/apache2/project_access.log combined
+
+    # optionally set the value of the environment variables used in the application
+    #SetEnv APP_ENV prod
+    #SetEnv APP_SECRET <app-secret-id>
+    #SetEnv DATABASE_URL "mysql://db_user:db_pass@host:3306/db_name"
+</VirtualHost>
+
+docker-compose up -d
+# open  http://127.0.0.1:8080/
+
+# set database in symfony .env
+DATABASE_URL="mysql://root:@db_gitlab:3306/db_name?serverVersion=5.7"
+
+# Créons la base de donnée depuis la CLI de Symfony. Pour nous simplifier les prochaines commandes, nous allons entrer dans le shell du conteneur “www”.
+docker exec -it www_docker_gitlab bash
+> /var/www# php bin/console doctrine:database:create
+
+# Mettons en place une entité “Demo” avec un champ “demo” de type string (et toutes les valeurs par défaut proposés par le Maker Bundle de Symfony), créons la migration associée puis exécutons la migration.
+> /var/www# php bin/console make:entity Demo
+> /var/www# php bin/console make:migration
+> /var/www# php bin/console doctrine:migrations:migrate
+
+# Création d’un dépôt GitLab et premier commit
+
+# git init
+git remote add origin git@gitlab.com:ramet/gitlab-symfony.git
+git add .
+git commit -m "Initial commit"
+git push -u origin master
+
