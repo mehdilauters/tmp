@@ -97,3 +97,32 @@ git add .
 git commit -m "Initial commit"
 git push -u origin master
 
+# Écriture d’un test unitaire (UnitTest)
+> /var/www# php bin/console make:unit-test
+
+# Éditons le fichier tests/UnitTest.php et ajoutons-y un test unitaire.
+<?php
+
+namespace App\Tests;
+
+use App\Entity\Demo;
+use PHPUnit\Framework\TestCase;
+
+class UnitTest extends TestCase
+{
+    public function testDemo()
+    {
+        $demo = new Demo();
+
+        $demo->setDemo('demo');
+
+        $this->assertTrue($demo->getDemo() === 'demo');
+    }
+}
+
+# Test pour vérifier qu’il fonctionne.
+> /var/www# php bin/phpunit
+
+git add .
+git commit -m "ajout test unitaire"
+git push
