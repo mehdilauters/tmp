@@ -136,7 +136,6 @@ touch .gitlab-ci.yml
 # - Vérification du “style” de code avec PHP CS
 # - Analyse statique avec PHP Stan
 # - Analyse statique des fichiers Twig avec Twig-lint
-# Using docker image php:8.1-apache
 # - Exécution de tests unitaires (et fonctionnels) avec PHP Unit
 
 git add .
