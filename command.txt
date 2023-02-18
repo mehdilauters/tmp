@@ -261,3 +261,5 @@ DATABASE_URL=mysql://myapptest:myapptest@mysql:3306/myapptest
 git add .
 git commit -m "Ajout des tests fonctionnels"
 git push
+
+# Vous devriez peut-être avoir un le fichier /src/Controller/DemoController.php qui ne passe pas le contrôle PSR-12 de PHP CS, je vous laisse faire la modification signalée (il manque des espaces autour d’un “.” en ligne 72) et refaire un commit + push.

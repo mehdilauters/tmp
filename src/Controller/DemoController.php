@@ -69,7 +69,7 @@ class DemoController extends AbstractController
     #[Route('/{id}', name: 'app_demo_delete', methods: ['POST'])]
     public function delete(Request $request, Demo $demo, DemoRepository $demoRepository): Response
     {
-        if ($this->isCsrfTokenValid('delete'.$demo->getId(), $request->request->get('_token'))) {
+        if ($this->isCsrfTokenValid('delete' . $demo->getId(), $request->request->get('_token'))) {
             $demoRepository->remove($demo, true);
         }
 
