@@ -126,3 +126,19 @@ class UnitTest extends TestCase
 git add .
 git commit -m "ajout test unitaire"
 git push
+
+# Mise en place du Pipeline GitLab CI
+
+touch .gitlab-ci.yml
+
+# Using docker image jakzal/phpqa:php8.1
+# - Check des failles de sécurité des dépendances avec Security Checker
+# - Vérification du “style” de code avec PHP CS
+# - Analyse statique avec PHP Stan
+# - Analyse statique des fichiers Twig avec Twig-lint
+# Using docker image php:8.1-apache
+# - Exécution de tests unitaires (et fonctionnels) avec PHP Unit
+
+git add .
+git commit -m "Ajout de la pipeline"
+git push
