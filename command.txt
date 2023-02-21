@@ -223,7 +223,7 @@ public function testShouldDisplayCreateNewDemo()
     }
 
 # Pour terminer, validons que nos tests fonctionnent
-> /var/www# php bin/phpunit --testdox
+> /var/www# php bin/phpunit
 
 # Modifier le fichier .gitlab-ci.yml
 
