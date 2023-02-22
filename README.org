@@ -24,7 +24,7 @@ cd docker
 
 Let's adapt the environment to our project by modifying the ~docker-compose.yml~ file.
 
-#+begin_src yml
+#+begin_src yaml
 version: "3.8"
 services:
 
@@ -58,13 +58,11 @@ volumes:
     db-data:
 #+end_src
 
-    1. A /MySQL/ container: you will have noticed the use of the ~MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'~ option, which allows us to indicate that we allow accounts without passwords. This will simplify the use of the *root* account when you customize your /Symfony/ ~.env~ files.
-    This container refers the ~dev~ network and use the ~db-data~ volume for the storage of the database.
-    2. A /PHP Apache/ container: This container is ~built~ from a /Dockerfile/ available in ~php~ subdirectory. You will also have noticed that, in the volumes, we map a ~/php/vhosts~ directory into the container (at the same for the website directory ~/var/www~). This allows use to update the content outside from the container.
-    This container also refer to the ~dev~ network.
-    3. If you want, you can also add a PHPMyAdmin container with:
-
-#+begin_src yml
+    We need the following containers:
+        1. A /MySQL/ container: you will have noticed the use of the ~MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'~ option, which allows us to indicate that we allow accounts without passwords. This will simplify the use of the *root* account when you customize your /Symfony/ ~.env~ files. This container refers the ~dev~ network and use the ~db-data~ volume for the storage of the database.
+        2. A /PHP Apache/ container: This container is ~built~ from a /Dockerfile/ available in ~php~ subdirectory. You will also have noticed that, in the volumes, we map a ~./php/vhosts~ directory into the container (at the same for the website directory ~/var/www~). This allows use to update the content or edit files outside from the container. This container also refer to the ~dev~ network.
+        3. If you want, you can also add a PHPMyAdmin container with:
+#+begin_src yaml
     phpmyadmin_gitlab:
         image: phpmyadmin
         container_name: phpmyadmin_docker_gitlab
@@ -129,7 +127,11 @@ First you have set the database in ~.env~ file:
 DATABASE_URL="mysql://root:@db_gitlab:3306/db_name?serverVersion=5.7"
 #+end_example
 
-Let's create the database from the /Symfony/ CLI. To simplify the next commands, we will enter the shell of the *www* container.
+Let's create the database from the /Symfony/ CLI. To simplify the next commands, we will enter the shell of the ~www_docker_gitlab~ container.
+
+#+begin_quote
+*Warning*: In the following, all commands beginning with ~> /var/www#~ mean that they must be executed inside the container ~www_docker_gitlab~.
+#+end_quote
 
 #+begin_src sh
 docker exec -it www_docker_gitlab bash
@@ -146,7 +148,7 @@ Let's set up a *Demo* entity with a *demo* field of type ~string~ (and all the d
 
 * Setting up a /GitLab/ repository and first commit
 
-/Symfony/ already initialize a /Git/ repository. After setting up an empty project in /GitLab/, add the *origin* remote:
+/Symfony/ already initialize a /Git/ repository. After setting up an empty project in /GitLab/, add the remote *origin* (replace the address with your own project):
 
 #+begin_src sh
 # git init
@@ -199,9 +201,9 @@ git commit -m "add unit test"
 git push
 #+end_src
 
-* Configure the CI pipeline
+* Configure the pipeline
 
-Using the docker image ~jakzal/phpqa:php8.1~ from [[https://github.com/jakzal/phpqa][Static Analysis Tools for PHP]], we want to set up:
+Using the docker image ~jakzal/phpqa:php8.1~ from [[https://github.com/jakzal/phpqa][Static Analysis Tools for PHP]], we want to set up the following steps:
  - Check for security flaws in dependencies with /Security Checker/
  - Check the code ~style~ with /PHP CS/
  - Run a static analysis with /PHP Stan/
@@ -212,7 +214,7 @@ Using the docker image ~jakzal/phpqa:php8.1~ from [[https://github.com/jakzal/ph
 
 Here is a template for ~.gitlab-ci.yml~ file:
 
-#+begin_src yml
+#+begin_src yaml
 image: jakzal/phpqa:php8.1
 
 before_script:
@@ -266,11 +268,15 @@ git commit -m "Ajout de la pipeline"
 git push
 #+end_src
 
-* Add functional tests with interaction with a /MySQL/ database
+    #+NAME: fig:gitlab_pipeline
+    #+ATTR_HTML: :align center
+    [[file:gitlab_pipeline.png]]
+
+* Add functional tests with interaction with the database
 
 The first thing we need to do is to set up the functional tests locally in our /Symfony/ project.
-We'll need to define which database is used for testing.
-Let's copy the ~.env.test~ file to ~.env.test.local~ (this one should not be committed!).
+We need to define which database is used for testing.
+Let's copy the ~.env.test~ file to ~.env.test.local~ (and this one should not be committed!).
 
 #+begin_src sh
 cp .env.test .env.test.local
@@ -310,7 +316,7 @@ And let's check that everything works by going to http://127.0.0.1:8080/demo/
 
 ** Edit the ~tests/FunctionalTest.php~ file
 
-A first test that checks that the /demo url is responding:
+Add a first test that checks that the ~/demo~ url is responding:
 
 #+begin_src php
 <?php
@@ -379,9 +385,9 @@ Finally, let's add a test that will insert data via the form, and then check tha
 > /var/www# php bin/phpunit
 #+end_src
 
-** Edit the ~.gitlab-ci.yml~ file
+** Update the section ~phpunit:~ in the ~.gitlab-ci.yml~ file
 
-#+begin_src yml
+#+begin_src yaml
 phpunit:
     image: php:8.1-apache
     stage: UnitTests
@@ -434,8 +440,12 @@ git push
 #+begin_quote
 *Warning*: For some reason, the access to the ~test~ database does not work with the *myapptest* account, so I use the *root* account instead.
 
-*Note*: You might have a ~/src/Controller/DemoController.php~ file that doesn't pass the /PHP CS PSR-12/ check, I'll let you make the modification reported (missing spaces around a "." on line 72) and do a ~commit + push~ again.
+*Note*: You might have a ~/src/Controller/DemoController.php~ file that doesn't pass the /PHP CS PSR-12/ check. Make the modification reported (missing spaces around a "." on line 72) and do a ~commit + push~ again.
 #+end_quote
+
+    #+NAME: fig:gitlab_failure
+    #+ATTR_HTML: :align center
+    [[file:gitlab_failure.png]]
 
 * Resources
 
