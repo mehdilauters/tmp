@@ -1,0 +1,442 @@
+#+TITLE: R4.02 - Continuous Integration of a Symfony project with GitLab
+#+AUTHOR: Pierre Ramet
+#+EMAIL: (concat "ramet" at-sign "labri.fr")
+#+DATE: {{{time(%d/%m/%Y)}}}
+#+LANGUAGE: en
+#+INCLUDE: "entete.org"
+
+* Setting up a /Symfony/ project and its development environment
+
+** Let's start with a new /Symfony/ project
+
+#+begin_src sh
+symfony new gitlab-symfony --full
+cd gitlab-symfony
+#+end_src
+
+** Prepare a /Docker/ environment to deploy on your local machine
+
+#+begin_src sh
+mkdir docker
+cd docker
+# git clone or copy the content of https://gitlab.com/ramet/environnement-de-developpement-symfony-5-avec-docker-et-docker-compose
+#+end_src
+
+Let's adapt the environment to our project by modifying the ~docker-compose.yml~ file.
+
+#+begin_src yml
+version: "3.8"
+services:
+
+    db_gitlab:
+        image: mysql
+        container_name: db_docker_gitlab
+        restart: always
+        volumes:
+            - db-data:/var/lib/mysql
+        environment:
+            MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+        networks:
+            - dev
+
+    www_gitlab:
+        build: php
+        container_name: www_docker_gitlab
+        ports:
+          - "8080:80"
+        volumes:
+            - ./php/vhosts:/etc/apache2/sites-enabled
+            - ../:/var/www
+        restart: always
+        networks:
+            - dev
+
+networks:
+    dev:
+
+volumes:
+    db-data:
+#+end_src
+
+    1. A /MySQL/ container: you will have noticed the use of the ~MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'~ option, which allows us to indicate that we allow accounts without passwords. This will simplify the use of the *root* account when you customize your /Symfony/ ~.env~ files.
+    This container refers the ~dev~ network and use the ~db-data~ volume for the storage of the database.
+    2. A /PHP Apache/ container: This container is ~built~ from a /Dockerfile/ available in ~php~ subdirectory. You will also have noticed that, in the volumes, we map a ~/php/vhosts~ directory into the container (at the same for the website directory ~/var/www~). This allows use to update the content outside from the container.
+    This container also refer to the ~dev~ network.
+    3. If you want, you can also add a PHPMyAdmin container with:
+
+#+begin_src yml
+    phpmyadmin_gitlab:
+        image: phpmyadmin
+        container_name: phpmyadmin_docker_gitlab
+        restart: always
+        depends_on:
+            - db_gitlab
+        ports:
+            - 8080:80
+        environment:
+            PMA_HOST: db
+        networks:
+            - dev
+#+end_src
+
+#+begin_quote
+*Warning*:  /Docker/ is not available at IUT department, please replace *docker* with *podman* in the following, for all the instructions related to containers on your local machine.
+But, of course, keep *docker* for instructions related to containers within /Gitlab-CI/.
+
+*Note*: Thanks to the volumes that are managed by /OverlayFS/ via /Fuse/, it is possible to use the ~-v~ option with *podman*, in the same way as with *docker*.
+#+end_quote
+
+The ~vhosts.conf~ file need to be updated :
+
+#+begin_example
+<VirtualHost *:80>
+    ServerName localhost
+
+    DocumentRoot /var/www/public
+    DirectoryIndex /index.php
+
+    <Directory /var/www/public>
+        AllowOverride None
+        Order Allow,Deny
+        Allow from All
+
+        FallbackResource /index.php
+    </Directory>
+
+    <Directory /var/www/public/bundles>
+        FallbackResource disabled
+    </Directory>
+    ErrorLog /var/log/apache2/project_error.log
+    CustomLog /var/log/apache2/project_access.log combined
+</VirtualHost>
+#+end_example
+
+** Let's start the full stack
+
+From the ~docker/~ subdirectory:
+
+#+begin_src sh
+docker-compose up -d
+#+end_src
+
+And let's check that everything works by going to http://127.0.0.1:8080/
+
+** Prepare the database with /Symfony/
+
+First you have set the database in ~.env~ file:
+
+#+begin_example
+DATABASE_URL="mysql://root:@db_gitlab:3306/db_name?serverVersion=5.7"
+#+end_example
+
+Let's create the database from the /Symfony/ CLI. To simplify the next commands, we will enter the shell of the *www* container.
+
+#+begin_src sh
+docker exec -it www_docker_gitlab bash
+> /var/www# php bin/console doctrine:database:create
+#+end_src
+
+Let's set up a *Demo* entity with a *demo* field of type ~string~ (and all the default values proposed by /Symfony/), create the associated migration and then run the migration.
+
+#+begin_src sh
+> /var/www# php bin/console make:entity Demo
+> /var/www# php bin/console make:migration
+> /var/www# php bin/console doctrine:migrations:migrate
+#+end_src
+
+* Setting up a /GitLab/ repository and first commit
+
+/Symfony/ already initialize a /Git/ repository. After setting up an empty project in /GitLab/, add the *origin* remote:
+
+#+begin_src sh
+# git init
+git remote add origin git@gitlab.com:ramet/gitlab-symfony.git
+git add .
+git commit -m "Initial commit"
+git push -u origin master
+#+end_src
+
+** Write a first unit test named *UnitTest*
+
+#+begin_src sh
+> /var/www# php bin/console make:unit-test
+#+end_src
+
+Let's edit the ~tests/UnitTest.php~ file and add a simple unit test:
+
+#+begin_src php
+<?php
+
+namespace App\Tests;
+
+use App\Entity\Demo;
+use PHPUnit\Framework\TestCase;
+
+class UnitTest extends TestCase
+{
+    public function testDemo()
+    {
+        $demo = new Demo();
+
+        $demo->setDemo('demo');
+
+        $this->assertTrue($demo->getDemo() === 'demo');
+    }
+}
+#+end_src
+
+** Test to ensure that it works
+
+#+begin_src sh
+> /var/www# php bin/phpunit
+#+end_src
+
+** Commit this first unit test
+
+#+begin_src sh
+git add .
+git commit -m "add unit test"
+git push
+#+end_src
+
+* Configure the CI pipeline
+
+Using the docker image ~jakzal/phpqa:php8.1~ from [[https://github.com/jakzal/phpqa][Static Analysis Tools for PHP]], we want to set up:
+ - Check for security flaws in dependencies with /Security Checker/
+ - Check the code ~style~ with /PHP CS/
+ - Run a static analysis with /PHP Stan/
+ - Run a static analysis of ~Twig~ files with /Twig-lint/
+ - Run our unit tests with /PHP Unit/
+
+** Prepare the pipeline for static analysis
+
+Here is a template for ~.gitlab-ci.yml~ file:
+
+#+begin_src yml
+image: jakzal/phpqa:php8.1
+
+before_script:
+    - composer install
+
+cache:
+    paths:
+        - vendor/
+
+stages:
+    - SecurityChecker
+    - CodingStandards
+    - UnitTests
+
+security-checker:
+    stage: SecurityChecker
+    script:
+        - local-php-security-checker  --path=./composer.lock
+    allow_failure: false
+
+phpcs:
+    stage: CodingStandards
+    script:
+        - phpcs -v --standard=PSR12 --ignore=./src/Kernel.php ./src
+    allow_failure: false
+
+phpstan:
+    stage: CodingStandards
+    script:
+        - phpstan analyse ./src
+    allow_failure: false
+
+twig-lint:
+    stage: CodingStandards
+    script:
+        - twig-lint lint ./templates
+    allow_failure: false
+
+phpunit:
+    stage: UnitTests
+    script:
+        - php bin/phpunit
+    allow_failure: false
+#+end_src
+
+** Commit this first pipeline
+
+#+begin_src sh
+git add .
+git commit -m "Ajout de la pipeline"
+git push
+#+end_src
+
+* Add functional tests with interaction with a /MySQL/ database
+
+The first thing we need to do is to set up the functional tests locally in our /Symfony/ project.
+We'll need to define which database is used for testing.
+Let's copy the ~.env.test~ file to ~.env.test.local~ (this one should not be committed!).
+
+#+begin_src sh
+cp .env.test .env.test.local
+#+end_src
+
+** Edit the ~.env.test.local~ file
+
+#+begin_example
+# .env.test.local
+KERNEL_CLASS='App\Kernel'
+APP_SECRET='$ecretf0rt3st'
+SYMFONY_DEPRECATIONS_HELPER=999999
+PANTHER_APP_ENV=panther
+DATABASE_URL="mysql://root:@db_gitlab:3306/db_test?serverVersion=5.7"
+#+end_example
+
+** Let's create the ~test~ database, and play the migrations
+
+#+begin_src sh
+> /var/www# php bin/console doctrine:database:create --env=test
+> /var/www# php bin/console doctrine:migrations:migrate --env=test
+#+end_src
+
+** Let's generate a CRUD (*Demo* entity) to have something to test
+
+#+begin_src sh
+> /var/www# php bin/console make:crud
+#+end_src
+
+And let's check that everything works by going to http://127.0.0.1:8080/demo/
+
+** Let's generate a functional test named *FunctionalTest*
+
+#+begin_src sh
+> /var/www# php bin/console make:functional-test
+#+end_src
+
+** Edit the ~tests/FunctionalTest.php~ file
+
+A first test that checks that the /demo url is responding:
+
+#+begin_src php
+<?php
+
+namespace App\Tests;
+
+use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
+
+class FunctionalTest extends WebTestCase
+{
+    public function testShouldDisplayDemoIndex()
+    {
+        $client = static::createClient();
+        $client->followRedirects();
+        $crawler = $client->request('GET', '/demo');
+
+        $this->assertResponseIsSuccessful();
+        $this->assertSelectorTextContains('h1', 'Demo index');
+    }
+}
+#+end_src
+
+Let's add a second test that loads the ~new~ form:
+
+#+begin_src php
+    public function testShouldDisplayCreateNewDemo()
+        {
+            $client = static::createClient();
+            $client->followRedirects();
+            $crawler = $client->request('GET', '/demo/new');
+
+            $this->assertResponseIsSuccessful();
+            $this->assertSelectorTextContains('h1', 'Create new Demo');
+        }
+#+end_src
+
+Finally, let's add a test that will insert data via the form, and then check that it exists:
+
+#+begin_src php
+    public function testShouldAddNewDemo()
+    {
+        $client = static::createClient();
+        $client->followRedirects();
+        $crawler = $client->request('GET', '/demo/new');
+
+        $buttonCrawlerNode = $crawler->selectButton('Save');
+
+        $form = $buttonCrawlerNode->form();
+
+        $uuid = uniqid();
+
+        $form = $buttonCrawlerNode->form([
+            'demo[demo]'    => 'Add Demo For Test' . $uuid,
+        ]);
+
+        $client->submit($form);
+
+        $this->assertResponseIsSuccessful();
+        $this->assertSelectorTextContains('body', 'Add Demo For Test' . $uuid);
+    }
+#+end_src
+
+** Test to ensure that it works
+
+#+begin_src
+> /var/www# php bin/phpunit
+#+end_src
+
+** Edit the ~.gitlab-ci.yml~ file
+
+#+begin_src yml
+phpunit:
+    image: php:8.1-apache
+    stage: UnitTests
+    services:
+        - name: mysql:5.7
+          alias: mysql
+    variables:
+      MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+      #MYSQL_ROOT_PASSWORD: pass_test
+      MYSQL_DATABASE: myapptest
+      #MYSQL_USER: myapptest
+      #MYSQL_PASSWORD: myapptest
+      #DATABASE_URL: 'mysql://myapptest:myapptest@mysql:3306/myapptest'
+      DATABASE_URL: 'mysql://root:@mysql:3306/myapptest'
+    before_script:
+        - apt-get update && apt-get install -y git libzip-dev
+        - curl -sSk https://getcomposer.org/installer | php -- --disable-tls && mv composer.phar /usr/local/bin/composer
+        - docker-php-ext-install mysqli pdo pdo_mysql zip
+        - php bin/console doctrine:database:drop --force --if-exists --env=test
+        - php bin/console doctrine:database:create --env=test
+        - php bin/console doctrine:migration:migrate --env=test --no-interaction
+    script:
+        - php bin/phpunit
+    allow_failure: false
+#+end_src
+
+** Edit the ~.env.test~ file
+
+Let's indicate to /Symfony/ to use the ~test~ database in the context of the tests:
+
+#+begin_example
+# .env.test
+KERNEL_CLASS='App\Kernel'
+APP_SECRET='$ecretf0rt3st'
+APP_ENV=test
+SYMFONY_DEPRECATIONS_HELPER=999999
+PANTHER_APP_ENV=panther
+# DATABASE_URL="mysql://myapptest:myapptest@mysql:3306/myapptest"
+DATABASE_URL="mysql://root:@mysql:3306/myapptest"
+#+end_example
+
+** Commit this new pipeline
+
+#+begin_src
+git add .
+git commit -m "add functional tests"
+git push
+#+end_src
+
+#+begin_quote
+*Warning*: For some reason, the access to the ~test~ database does not work with the *myapptest* account, so I use the *root* account instead.
+
+*Note*: You might have a ~/src/Controller/DemoController.php~ file that doesn't pass the /PHP CS PSR-12/ check, I'll let you make the modification reported (missing spaces around a "." on line 72) and do a ~commit + push~ again.
+#+end_quote
+
+* Resources
+
+- [[https://yoandev.co/int%C3%A9gration-continue-dun-projet-symfony-5-avec-gitlab-ci/][Intégration continue d’un projet Symfony 5 avec GitLab CI]].
